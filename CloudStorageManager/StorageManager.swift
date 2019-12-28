@@ -14,26 +14,38 @@ enum ResultType<T> {
 }
 
 protocol Uploader {
-    func upload(from data: Data, filePath: String, contentType: String?, completion: @escaping  (ResultType<URL>) -> Void) -> StorageUploadTask?
-    func upload(from image: URL, filePath: String, contentType: String?, completion: @escaping (URL) -> Void)
+    func upload(from data: Data,
+                remotePath: String,
+                contentType: String?,
+                completion: @escaping  (ResultType<URL>) -> Void) -> StorageUploadTask?
+
+    func upload(from image: URL,
+                remotePath: String,
+                contentType: String?,
+                completion: @escaping (ResultType<URL>) -> Void)  -> StorageUploadTask?
 }
 
 protocol Downloader {
-    func download(from filePath: String, comapletion: @escaping (ResultType<UIImage>) -> Void) -> StorageDownloadTask?
-    func download(filePath: URL, comapletion: @escaping (URL) -> Void)
+    func download(from remotePath: String,
+                  comapletion: @escaping (ResultType<UIImage>) -> Void) -> StorageDownloadTask?
 
+    func download(from remotePath: String,
+                  localPath: URL,
+                  comapletion: @escaping (ResultType<URL>) -> Void) -> StorageDownloadTask?
 }
 
 public final class StorageManager {
 
-    public var uploadTask: StorageUploadTask?
-    public var downloadTask: StorageDownloadTask?
+    public let reference: StorageReference
+    public let metadata: StorageMetadata
 
-    public init() {}
+    public init(reference: StorageReference = Storage.storage().reference(),
+                metadata: StorageMetadata = StorageMetadata()) {
+        self.reference = reference
+        self.metadata = metadata
+    }
 
     func delete(filePath: String, completion: @escaping (ResultType<Void>) -> Void) {
-        let storage = Storage.storage()
-        let reference = storage.reference()
         let deleteReference = reference.child(filePath)
 
         deleteReference.delete { error in
@@ -44,71 +56,26 @@ public final class StorageManager {
             }
         }
     }
-
-    func observe(uploadTask: StorageUploadTask?) {
-        // Listen for state changes, errors, and completion of the upload.
-        uploadTask?.observe(.resume) { snapshot in
-            // Upload resumed, also fires when the upload starts
-        }
-
-        uploadTask?.observe(.pause) { snapshot in
-            // Upload paused
-        }
-
-        uploadTask?.observe(.progress) { snapshot in
-            // Upload reported progress
-            let percentComplete = 100.0 * Double(snapshot.progress!.completedUnitCount)
-                / Double(snapshot.progress!.totalUnitCount)
-        }
-
-        uploadTask?.observe(.success) { snapshot in
-            // Upload completed successfully
-        }
-
-        uploadTask?.observe(.failure) { snapshot in
-            if let error = snapshot.error as? NSError {
-                switch (StorageErrorCode(rawValue: error.code)!) {
-                case .objectNotFound:
-                    // File doesn't exist
-                    break
-                case .unauthorized:
-                    // User doesn't have permission to access file
-                    break
-                case .cancelled:
-                    // User canceled the upload
-                    break
-
-                case .unknown:
-                    // Unknown error occurred, inspect the server response
-                    break
-                default:
-                    // A separate error occurred. This is a good place to retry the upload.
-                    break
-                }
-            }
-        }
-    }
 }
 
 extension StorageManager: Uploader {
 
     func upload(from data: Data,
-                filePath: String,
+                remotePath: String,
                 contentType: String? = nil,
                 completion: @escaping (ResultType<URL>) -> Void) -> StorageUploadTask? {
 
-        let storage = Storage.storage()
-        let reference = storage.reference()
-        let uploadReference = reference.child(filePath)
+        let uploadReference = reference.child(remotePath)
+        metadata.contentType = contentType
 
-        let metaData = StorageMetadata()
-        metaData.contentType = contentType ?? ""
-
-        uploadTask = uploadReference.putData(data, metadata: metaData) { (metadata, error) in
+        let uploadTask = uploadReference.putData(data, metadata: metadata) { (metadata, error) in
             uploadReference.downloadURL { (url, error) in
-                guard let downloadURL = url else {
-                    return
+
+                if let error = error {
+                    completion(.failure(error))
                 }
+
+                guard let downloadURL = url else { return }
                 completion(.success(downloadURL))
             }
         }
@@ -116,46 +83,39 @@ extension StorageManager: Uploader {
     }
 
     func upload(from image: URL,
-                filePath: String,
+                remotePath: String,
                 contentType: String?,
-                completion: @escaping (URL) -> Void) {
+                completion: @escaping (ResultType<URL>) -> Void) -> StorageUploadTask? {
 
+        let uploadReference = reference.child(remotePath)
+        metadata.contentType = contentType
 
-        let storage = Storage.storage()
-        let reference = storage.reference()
-        let uploadReference = reference.child(filePath)
-
-        let metaData = StorageMetadata()
-        metaData.contentType = contentType ?? ""
-
-        uploadTask = uploadReference.putFile(from: image, metadata: metaData) { (metadata, error) in
-
-            guard let metadata = metadata else {
-                return
-            }
+        let uploadTask = uploadReference.putFile(from: image, metadata: metadata) { (metadata, error) in
 
             uploadReference.downloadURL { (url, error) in
-                guard let downloadURL = url else {
-                    return
+
+                if let error = error {
+                    completion(.failure(error))
                 }
-                completion(downloadURL)
+
+                guard let downloadURL = url else { return }
+                completion(.success(downloadURL))
             }
         }
+
+        return uploadTask
     }
 }
 
 extension StorageManager: Downloader {
 
-    func download(from filePath: String,
+    func download(from remotePath: String,
                   comapletion: @escaping (ResultType<UIImage>) -> Void) -> StorageDownloadTask? {
 
-        let storage = Storage.storage()
-        let reference = storage.reference()
-        let downloadReference = reference.child(filePath)
+        let downloadReference = reference.child(remotePath)
 
-        downloadTask = downloadReference.getData(maxSize: 1 * 1024 * 1024) { data, error in
+        let downloadTask = downloadReference.getData(maxSize: 1 * 1024 * 1024) { data, error in
             if let error = error {
-                print("\(error)")
                 comapletion(.failure(error))
             }
 
@@ -166,14 +126,20 @@ extension StorageManager: Downloader {
         return downloadTask
     }
 
-    func download(filePath: URL,
-                  comapletion: @escaping (URL) -> Void) {
+    func download(from remotePath: String,
+                  localPath: URL,
+                  comapletion: @escaping (ResultType<URL>) -> Void) -> StorageDownloadTask? {
 
-        let storage = Storage.storage()
-        let reference = storage.reference()
-        let downloadReference = reference.child("")
+        let downloadReference = reference.child(remotePath)
 
-        // Start the download (in this case writing to a file)
-        downloadTask = downloadReference.write(toFile: filePath)
+        let downloadTask = downloadReference.write(toFile: localPath) { url, error in
+            if let error = error {
+                comapletion(.failure(error))
+            }
+
+            guard let url = url else { return }
+            comapletion(.success(url))
+        }
+        return downloadTask
     }
 }
