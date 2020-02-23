@@ -18,10 +18,7 @@ CloudStorageManager is a utility framework for Firebase Cloud Storage
 
 ```
 # Use the latest version
-github "https://github.com/ikawashima41/CloudStorageManager.git"
-
-# Use the branch
-github "https://github.com/ikawashima41/CloudStorageManager.git" "master"
+github "ikawashima41/CloudStorageManager"
 ```
 
 # Usage
